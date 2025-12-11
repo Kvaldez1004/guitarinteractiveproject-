@@ -1,0 +1,303 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Hand Gesture Guitar</title>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils"></script>
+    <style>
+        body {
+            margin: 0;
+            padding: 20px;
+            font-family: 'Arial', sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            min-height: 100vh;
+            color: white;
+        }
+        h1 {
+            margin-bottom: 10px;
+            text-shadow: 2px 2px 4px rgba(0,0,0,0.3);
+        }
+        .container {
+            background: rgba(255, 255, 255, 0.1);
+            backdrop-filter: blur(10px);
+            border-radius: 20px;
+            padding: 30px;
+            box-shadow: 0 8px 32px rgba(0,0,0,0.3);
+        }
+        .video-container {
+            position: relative;
+            display: inline-block;
+            border-radius: 15px;
+            overflow: hidden;
+            box-shadow: 0 4px 20px rgba(0,0,0,0.3);
+        }
+        #video {
+            display: block;
+            transform: scaleX(-1);
+            width: 640px;
+            height: 480px;
+        }
+        #canvas {
+            position: absolute;
+            top: 0;
+            left: 0;
+            transform: scaleX(-1);
+        }
+        #status {
+            text-align: center;
+            margin-top: 20px;
+            font-size: 24px;
+            font-weight: bold;
+            text-shadow: 2px 2px 4px rgba(0,0,0,0.3);
+        }
+        #chord {
+            color: #ffd700;
+            font-size: 36px;
+        }
+        .instructions {
+            margin-top: 20px;
+            background: rgba(255, 255, 255, 0.2);
+            padding: 20px;
+            border-radius: 10px;
+            max-width: 640px;
+        }
+        .instructions h3 {
+            margin-top: 0;
+        }
+        .gesture-list {
+            list-style: none;
+            padding: 0;
+        }
+        .gesture-list li {
+            margin: 10px 0;
+            padding: 10px;
+            background: rgba(255, 255, 255, 0.1);
+            border-radius: 5px;
+        }
+        button {
+            margin-top: 20px;
+            padding: 15px 30px;
+            font-size: 18px;
+            background: #ffd700;
+            color: #333;
+            border: none;
+            border-radius: 10px;
+            cursor: pointer;
+            font-weight: bold;
+            transition: transform 0.2s;
+        }
+        button:hover {
+            transform: scale(1.05);
+        }
+        button:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+        .error {
+            background: rgba(255, 100, 100, 0.3);
+            padding: 15px;
+            border-radius: 10px;
+            margin-top: 20px;
+        }
+    </style>
+</head>
+<body>
+    <h1>🎸 Hand Gesture Guitar 🎸</h1>
+    
+    <div class="container">
+        <div class="video-container">
+            <video id="video" autoplay playsinline></video>
+            <canvas id="canvas" width="640" height="480"></canvas>
+        </div>
+        
+        <div id="status">
+            <div>Current Gesture: <span id="gesture">None</span></div>
+            <div>Playing: <span id="chord">-</span></div>
+        </div>
+        
+        <button id="startBtn">Start Camera & Audio</button>
+        
+        <div id="errorMsg" class="error" style="display:none;"></div>
+    </div>
+    
+    <div class="instructions">
+        <h3>How to Play:</h3>
+        <ul class="gesture-list">
+            <li>✊ <strong>Fist</strong> → C Major</li>
+            <li>✋ <strong>Open Hand</strong> → G Major</li>
+            <li>✌️ <strong>Peace Sign</strong> → D Major</li>
+            <li>👍 <strong>Thumbs Up</strong> → A Minor</li>
+            <li>🤘 <strong>Rock Sign</strong> → E Minor</li>
+        </ul>
+        <p><strong>Note:</strong> Make sure your audio files (c-major.mp3, g-major.mp3, etc.) are in the same folder as this HTML file!</p>
+    </div>
+
+    <script>
+        let audioContext;
+        let audioBuffers = {};
+        let currentSource = null;
+        let lastGesture = null;
+        let audioStarted = false;
+
+        // Define your chords and their corresponding audio files
+        const chords = {
+            'fist': { name: 'C Major', file: 'C_major_chord.wav' },
+            'open': { name: 'G Major', file: 'G-major_chord.wav' },
+            'peace': { name: 'D Major', file: 'D_major_chord.wav' },
+            'thumbsup': { name: 'A Minor', file: 'A_minor_chord.wav' },
+            'rock': { name: 'E Minor', file: 'E_minor_chord.wav' }
+        };
+
+        async function loadAudioFiles() {
+            audioContext = new (window.AudioContext || window.webkitAudioContext)();
+            const errorMsg = document.getElementById('errorMsg');
+            
+            for (const [gesture, chord] of Object.entries(chords)) {
+                try {
+                    const response = await fetch(chord.file);
+                    if (!response.ok) {
+                        throw new Error(`Failed to load ${chord.file}`);
+                    }
+                    const arrayBuffer = await response.arrayBuffer();
+                    audioBuffers[gesture] = await audioContext.decodeAudioData(arrayBuffer);
+                    console.log(`Loaded ${chord.file}`);
+                } catch (error) {
+                    errorMsg.style.display = 'block';
+                    errorMsg.textContent = `Error loading ${chord.file}: ${error.message}. Make sure the audio files are in the same folder!`;
+                    console.error(error);
+                }
+            }
+        }
+
+        document.getElementById('startBtn').addEventListener('click', async () => {
+            if (!audioStarted) {
+                await loadAudioFiles();
+                audioStarted = true;
+                document.getElementById('startBtn').textContent = 'Audio Ready!';
+                document.getElementById('startBtn').disabled = true;
+            }
+            initCamera();
+        });
+
+        function detectGesture(landmarks) {
+            const fingers = [];
+            
+            // Thumb
+            fingers.push(landmarks[4].x < landmarks[3].x);
+            
+            // Other fingers
+            for (let i = 0; i < 4; i++) {
+                const tip = landmarks[8 + i * 4];
+                const pip = landmarks[6 + i * 4];
+                fingers.push(tip.y < pip.y);
+            }
+
+            const extended = fingers.filter(f => f).length;
+            
+            // Fist
+            if (extended === 0) return 'fist';
+            
+            // Open hand
+            if (extended === 5) return 'open';
+            
+            // Peace sign (index and middle)
+            if (extended === 2 && fingers[1] && fingers[2]) return 'peace';
+            
+            // Thumbs up
+            if (extended === 1 && fingers[0]) return 'thumbsup';
+            
+            // Rock sign (index and pinky)
+            if (extended === 3 && fingers[1] && fingers[4]) return 'rock';
+            
+            return null;
+        }
+
+        function playChord(gestureName) {
+            if (!audioStarted || !audioContext) return;
+            
+            const buffer = audioBuffers[gestureName];
+            if (!buffer) {
+                console.warn(`No audio loaded for ${gestureName}`);
+                return;
+            }
+            
+            // Stop any currently playing sound
+            if (currentSource) {
+                currentSource.stop();
+            }
+            
+            // Create and play new sound
+            currentSource = audioContext.createBufferSource();
+            currentSource.buffer = buffer;
+            currentSource.connect(audioContext.destination);
+            currentSource.start(0);
+            
+            const chord = chords[gestureName];
+            document.getElementById('chord').textContent = chord.name;
+        }
+
+        function initCamera() {
+            const video = document.getElementById('video');
+            const canvas = document.getElementById('canvas');
+            const ctx = canvas.getContext('2d');
+
+            const hands = new Hands({
+                locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`
+            });
+
+            hands.setOptions({
+                maxNumHands: 1,
+                modelComplexity: 1,
+                minDetectionConfidence: 0.7,
+                minTrackingConfidence: 0.7
+            });
+
+            hands.onResults((results) => {
+                ctx.save();
+                ctx.clearRect(0, 0, canvas.width, canvas.height);
+                
+                if (results.multiHandLandmarks && results.multiHandLandmarks.length > 0) {
+                    const landmarks = results.multiHandLandmarks[0];
+                    
+                    drawConnectors(ctx, landmarks, HAND_CONNECTIONS, {color: '#00FF00', lineWidth: 2});
+                    drawLandmarks(ctx, landmarks, {color: '#FF0000', lineWidth: 1, radius: 3});
+                    
+                    const gesture = detectGesture(landmarks);
+                    
+                    if (gesture) {
+                        document.getElementById('gesture').textContent = gesture.charAt(0).toUpperCase() + gesture.slice(1);
+                        
+                        if (gesture !== lastGesture) {
+                            playChord(gesture);
+                            lastGesture = gesture;
+                        }
+                    } else {
+                        document.getElementById('gesture').textContent = 'Unknown';
+                    }
+                } else {
+                    document.getElementById('gesture').textContent = 'None';
+                    document.getElementById('chord').textContent = '-';
+                }
+                
+                ctx.restore();
+            });
+
+            const camera = new Camera(video, {
+                onFrame: async () => {
+                    await hands.send({image: video});
+                },
+                width: 640,
+                height: 480
+            });
+
+            camera.start();
+        }
+    </script>
+</body>
+</html>
